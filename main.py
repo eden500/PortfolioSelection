@@ -2,18 +2,23 @@ import pandas as pd
 import yfinance as yf
 from portfolio import Portfolio
 import numpy as np
+import os.path
 
 
-START_DATE = '2017-08-01'
-END_TRAIN_DATE = '2022-08-31'
-END_TEST_DATE = '2022-09-31'
+START_DATE = '2022-04-01'
+END_TRAIN_DATE = '2022-05-30'
+END_TEST_DATE = '2022-06-30'
 
 
 def get_data():
-    wiki_table = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')
-    sp_tickers = wiki_table[0]
-    tickers = [ticker.replace('.', '-') for ticker in sp_tickers['Symbol'].to_list()]
-    data = yf.download(tickers, START_DATE, END_TEST_DATE)
+    if os.path.isfile('data.pd'):
+        return pd.read_pickle('data.pd')
+    else:
+        wiki_table = pd.read_html('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies')
+        sp_tickers = wiki_table[0]
+        tickers = [ticker.replace('.', '-') for ticker in sp_tickers['Symbol'].to_list()]
+        data = yf.download(tickers, START_DATE, END_TEST_DATE)
+        data.to_pickle('data.pd')
     return data
 
 
