@@ -5,19 +5,29 @@ import torch.nn as nn
 from scipy import optimize
 import scipy
 import cvxpy as cp
-
+from sklearn.covariance import empirical_covariance
+from sklearn.linear_model import LinearRegression
+import pickle
 
 class Portfolio:
-
-    def __init__(self):
+    def __init__(self, k, weight, days):
         """
         The class should load the model weights, and prepare anything needed for the testing of the model.
         The training of the model should be done before submission, here it should only be loaded
         """
         data = pd.read_pickle('data.pd')
+        # self.min_var_portfolio = self.min_variance_portfolio(data)
+        self.reg_min_var_portfolio = self.min_variance_portfolio(data)
+        # self.portfolio = self.max_sharpe_cv(data)
+        # self.portfolio = self.market_portfolio(data)
+        # self.best_bask_portfolio = self.best_basket_portfolio(data)
+        self.portfolio = self.find_k_best_stock(data, k, 5, weight)
+        self.first_day = days
+
+
         # self.portfolio = self.max_sharpe(data)
-        # self.portfolio = self.min_variance_portfolio(data)
-        self.portfolio = self.max_sharpe_cv(data)
+        # np.save("itr=10000", self.portfolio)
+
         print('portfolios are calculated')
 
     def get_portfolio(self, train_data: pd.DataFrame) -> np.ndarray:
@@ -27,7 +37,10 @@ class Portfolio:
         with all the training data. The following day (the first that does not appear in the index) is the test day
         :return: a numpy array of shape num_stocks with the portfolio for the test day
         """
-        return self.portfolio
+        if self.first_day:
+            self.first_day -= 1
+            return self.portfolio
+        return self.reg_min_var_portfolio
 
     def market_portfolio(self, train_data: pd.DataFrame) -> np.ndarray:
         """
@@ -58,6 +71,16 @@ class Portfolio:
         min_variance_portfolio = (cov_inverse @ e) / (e.T @ cov_inverse @ e)
         return min_variance_portfolio
 
+    def regularized_min_variance_portfolio(self, train_data: pd.DataFrame, tau=0.1) -> np.ndarray:
+        train_data = train_data['Adj Close']
+        cov = train_data.cov()
+        port = cp.Variable(len(cov))
+        objective = cp.Minimize(cp.quad_form(port, cov) + tau * cp.norm(port, 1))
+        contrains = [sum(port) == 1]
+        prob = cp.Problem(objective, contrains)
+        result = prob.solve()
+        return port.value
+
     def best_basket_portfolio(self, train_data: pd.DataFrame) -> np.ndarray:
         train_data = train_data['Adj Close']
         mean = train_data.mean()
@@ -67,8 +90,23 @@ class Portfolio:
         best_basket_portfolio = (cov_inverse @ mean) / (e.T @ cov_inverse @ mean)
         return best_basket_portfolio
 
-    def best_basket_portfolio(self, train_data: pd.DataFrame) -> np.ndarray:
-        pass
+    def find_k_best_stock(self, train_data: pd.DataFrame, k: int, days: int, weight):
+        train_data = train_data['Adj Close']
+        regressions = []
+        for stock in train_data:
+            reg = LinearRegression().fit(np.arange(days).reshape(-1, 1), train_data[stock][-days:])
+            regressions.append(reg.coef_[0])#/np.std(train_data[stock][-days:]))
+        indices = np.argsort(regressions)
+        best = indices[-k:]
+        worst = indices[:k]
+        return self.allocate_best_and_short_worst(best, worst, len(regressions), weight)
+
+    def allocate_best_and_short_worst(self, best, worst, size, weight):
+        portfolio = np.zeros(size)
+        portfolio[best] = weight+1/len(best)
+        portfolio[worst] = -weight
+        return portfolio
+
 
     def max_sharpe(self, train_data: pd.DataFrame) -> np.ndarray:
         # define maximization of Sharpe Ratio using principle of duality
@@ -91,16 +129,13 @@ class Portfolio:
         cov = train_data.cov()
         PortfolioSize = len(mean)
         RiskFreeRate = 0
-        xinit = np.repeat(1/PortfolioSize, PortfolioSize)
+        xinit = np.repeat(1 / PortfolioSize, PortfolioSize)
         cons = ({'type': 'eq', 'fun': constraintEq})
-        lb = 0
-        ub = 1
-        bnds = tuple([(lb, ub) for x in xinit])
 
         # invoke minimize solver
         opt = optimize.minimize(f, x0=xinit, args=(mean, cov,
-                                                   RiskFreeRate, PortfolioSize), method='SLSQP', bounds=bnds,
-                                constraints=cons, tol=10 ** -5, options={'maxiter': 2000, 'disp': True})
+                                                   RiskFreeRate, PortfolioSize), method='SLSQP',
+                                constraints=cons, tol=10 ** -3, options={'maxiter': 10000, 'disp': True})
 
         return scipy.special.softmax(opt.jac)
 
@@ -108,7 +143,8 @@ class Portfolio:
         train_data = train_data['Adj Close']
         mu = train_data.mean()
         cov = train_data.cov()
-        cov = np.cov(train_data.T) + 10e-5
+        cov = np.cov(train_data.T)
+        cov = empirical_covariance(train_data)
         print(np.all(np.linalg.eigvals(cov) > 0))
         n = len(mu)
         # cov = np.eye(n)
@@ -117,10 +153,11 @@ class Portfolio:
         ret = w @ mu.T
         risk = cp.quad_form(w, cov)
         gamma.value = 1
-        prob = cp.Problem(cp.Maximize(ret - gamma * risk), [cp.sum(w) == 1, w >= 0])
+        prob = cp.Problem(cp.Maximize(risk), [cp.sum(w) == 1])
         # prob = cp.Problem(cp.Maximize(risk/ret), [cp.sum(w) == 1, w >= 0])
         prob.solve(solver='ECOS', verbose=True)
         return w.value
+
 #     def lstm_portfolio(self, train_data: pd.DataFrame) -> np.ndarray:
 #         train_data = train_data['Adj Close']
 #         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
